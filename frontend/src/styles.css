@@ -1,0 +1,96 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: linear-gradient(135deg, #0a0a0a, #0f172a);
+  color: white;
+}
+
+/* Navbar */
+.navbar {
+  padding: 15px;
+  background: #020617;
+  border-bottom: 1px solid #1e293b;
+  text-align: center;
+}
+
+/* Upload Panel */
+.upload-panel {
+  display: flex;
+  justify-content: space-around;
+  padding: 15px;
+  background: #020617;
+}
+
+.upload-panel input {
+  padding: 8px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: white;
+}
+
+.upload-panel button {
+  margin-left: 5px;
+  background: #1e3a8a;
+  color: white;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+}
+
+/* Chat */
+.chat-container {
+  width: 60%;
+  margin: auto;
+}
+
+.chat-box {
+  height: 400px;
+  overflow-y: auto;
+  border: 1px solid #1e293b;
+  padding: 10px;
+  background: #020617;
+}
+
+/* Messages */
+.message {
+  margin: 10px 0;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.user {
+  background: #1e3a8a;
+  text-align: right;
+}
+
+.bot {
+  background: #020617;
+  border: 1px solid #1e293b;
+}
+
+/* Input */
+.input-box {
+  display: flex;
+  margin-top: 10px;
+}
+
+.input-box input {
+  flex: 1;
+  padding: 10px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: white;
+}
+
+.input-box button {
+  padding: 10px;
+  background: #2563eb;
+  border: none;
+  color: white;
+}
+
+/* Loader */
+.loader {
+  text-align: center;
+  color: #94a3b8;
+}

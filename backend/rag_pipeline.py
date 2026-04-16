@@ -1,5 +1,10 @@
 # step 1 data ingestion and normalisation
 from urllib import response
+from dotenv import load_dotenv
+import os
+from groq import Groq
+import os
+
 
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from langchain_community.document_loaders import WebBaseLoader,PyPDFLoader
@@ -21,55 +26,81 @@ from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
 from langchain_community.retrievers import BM25Retriever
 # imports for step 9
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-def load_data(input_type,input_value):
-    documents=[]
-    if input_type=="pdf":
-        loader=PyPDFLoader(input_value)
-        docs=loader.load()
-        for d in docs:
-            d.metadata['type']='pdf'
-            d.metadata['source']=input_value
-            d.metadata['page']=d.metadata.get('page',None)
-        documents.extend(docs)
-    elif input_type=="web":
-        loader=WebBaseLoader(input_value)
-        docs=loader.load()
-        for d in docs:
-            d.metadata['type']='web'
-            d.metadata['source']=input_value
-        documents.extend(docs)
-    elif input_type=="youtube":
-        video_id=input_value
-        try:
-            api=YouTubeTranscriptApi()
-            transcript_list=api.fetch(video_id)
-            transcript=" ".join(chunk.text for chunk in transcript_list)
-            doc=Document(
-                page_content=transcript,
-                metadata={
-                    'type':'youtube',
-                    'source':video_id
-                }
-            )
-            documents.append(doc)
-        except TranscriptsDisabled:
-            print("Transcripts are disabled for this video.")
-    else:
-        print("Unsupported input type. Please choose from 'pdf', 'web', or 'youtube'.")
-    return documents
+from huggingface_hub import InferenceClient
+load_dotenv()
 
+HF_TOKEN = os.getenv("HF_TOKEN")
+def load_data(input_type, input_value):
+    documents = []
+
+    # 📄 PDF
+    if input_type == "pdf":
+        loader = PyPDFLoader(input_value)
+        docs = loader.load()
+
+        for d in docs:
+            d.metadata['type'] = 'pdf'
+            d.metadata['source'] = input_value
+            d.metadata['page'] = d.metadata.get('page', None)
+
+        documents.extend(docs)
+
+    # 🌐 WEB
+    elif input_type == "web":
+        loader = WebBaseLoader(input_value)
+        docs = loader.load()
+
+        for d in docs:
+            d.metadata['type'] = 'web'
+            d.metadata['source'] = input_value
+
+        documents.extend(docs)
+
+    # ▶️ YOUTUBE
+    elif input_type == "youtube":
+        video_id = input_value
+
+        try:
+            api = YouTubeTranscriptApi()
+            transcript_list = api.fetch(video_id)
+
+            for chunk in transcript_list:
+                doc = Document(
+                    page_content=chunk.text,
+                    metadata={
+                        "type": "youtube",
+                        "source": video_id,
+                        "start": int(chunk.start)  # 🔥 timestamp
+                    }
+                )
+                documents.append(doc)
+
+        except TranscriptsDisabled:
+            print("❌ Transcripts are disabled for this video.")
+
+    # ❌ INVALID TYPE
+    else:
+        print("Unsupported input type. Use 'pdf', 'web', or 'youtube'.")
+
+    return documents
 
 # step 2 nlp layer( cleaning,sentence segmentation,ner,keyword extraction)
 nlp=spacy.load("en_core_web_sm")
 kw_model=KeyBERT()
+import re
 def preprocess_documents(documents):
     preprocessed_docs=[]
     for doc in documents:
         text=doc.page_content
         # cleaning the data
-        cleaned_text=text.replace("\n"," ").strip()
+        cleaned_text = text.strip()
         # nlp pipeline
         cleaned_doc=nlp(cleaned_text)
+         # 🔥 FIX missing spaces (VERY IMPORTANT)
+        cleaned_text = re.sub(r'([a-z])([A-Z])', r'\1 \2', cleaned_text)
+
+        # 🔥 OPTIONAL: normalize spacing
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
         sentences=[]
         for sent in cleaned_doc.sents:
             sentences.append(sent.text)
@@ -138,6 +169,10 @@ llm = HuggingFacePipeline.from_model_id(
     )
 )
 model=ChatHuggingFace(llm=llm)
+client = InferenceClient(
+    model="google/flan-t5-large",
+    token=HF_TOKEN
+)
 query_prompt = PromptTemplate(
     input_variables=["query", "entities", "keywords"],
     template="""
@@ -181,32 +216,40 @@ def extract_queries(response_text):
             alternatives.append(line.split(".", 1)[1].strip())
 
     return [rewritten] + alternatives
-def process_query(query):
-    # ✅ Step 1: NLP Processing
-    doc = nlp(query)
+# def process_query(query):
+#     # ✅ Step 1: NLP Processing
+#     doc = nlp(query)
 
-    entities = [ent.text for ent in doc.ents]
-    keywords = [kw[0] for kw in kw_model.extract_keywords(query, top_n=5)]
+#     entities = [ent.text for ent in doc.ents]
+#     keywords = [kw[0] for kw in kw_model.extract_keywords(query, top_n=5)]
     
-    # ✅ Step 2: Call LLM using PromptTemplate
-    chain = query_prompt | model
+#     # ✅ Step 2: Call LLM using PromptTemplate
+#     chain = query_prompt | model
 
-    response = chain.invoke({
-        "query": query,
-        "entities": ", ".join(entities) if entities else "None",
-        "keywords": ", ".join(keywords) if keywords else "None"
-    })
-    # ✅ FIX HERE
-    response_text = response.content if hasattr(response, "content") else response
+#     response = chain.invoke({
+#         "query": query,
+#         "entities": ", ".join(entities) if entities else "None",
+#         "keywords": ", ".join(keywords) if keywords else "None"
+#     })
+#     # ✅ FIX HERE
+#     response_text = response.content if hasattr(response, "content") else response
 
-    queries = extract_queries(response_text)
+#     queries = extract_queries(response_text)
 
-    return {
-        "original_query": query,
-        "entities": entities,
-        "keywords": keywords,
-        "multi_queries": queries
-    }
+#     return {
+#         "original_query": query,
+#         "entities": entities,
+#         "keywords": keywords,
+#         "multi_queries": queries
+#     }
+def process_query(query):
+    if len(chat_history) >= 2:
+        last_question = chat_history[-2].content
+
+        # 🔥 Rewrite query using previous question
+        query = f"{last_question} -> {query}"
+
+    return {"multi_queries": [query]}
 # step 6: retrive data using faiss retriver and bm25 retriver is used for keyword based retriveal
 def retrive_documents(vector_store,query_data,documents,k=5):
     faiss_retriever=vector_store.as_retriever(search_type="mmr",
@@ -250,37 +293,42 @@ def retrive_documents(vector_store,query_data,documents,k=5):
 # step 7:source aware context building :giving citations like page number is it from video or web page or pdf
 
 def buid_context(docs):
-    context=""
+    context = ""
     for doc in docs:
-        dtype=doc.metadata.get('type','unknown')
-        source=doc.metadata.get('source','unknown')
+        dtype = doc.metadata.get('type','unknown')
+        source = doc.metadata.get('source','unknown')
+
         if dtype=='pdf':
             page=doc.metadata.get("page","N/A")
             header=f"[PDF:{source},Page:{page}]"
         elif dtype=="web":
             header=f"[WEB:{source}]"
         elif dtype=="youtube":
-            timestamp=doc.metadata.get("timestamp","N/A")
-            header=f"[YOUTUBE:{source},Timestamp:{timestamp}]"
+            start = doc.metadata.get("start", 0)
+            header = f"[YOUTUBE:{source}, Time:{start}]"
         else:
             header="[UNKNOWN SOURCE]"
+
         context += header + "\n"
-        context += doc.page_content + "\n\n"
+        context += doc.page_content[:300] + "\n\n"   # 🔥 LIMIT
+
     return context
 
 answer_prompt = PromptTemplate(
-    input_variables=["context", "query", "history"],
+    input_variables=["context", "query"],
     template="""
-You are an AI assistant that answers questions using retrieved documents.
+ 
+You are a helpful AI assistant.
 
-Instructions:
-- Use ONLY the provided context.
-- Include source references (e.g., PDF name, page, or video ID) in your answer.
-- Do NOT fabricate information.
-- If the answer is not available, respond: "I don't know".
+Rules:
+- Answer ONLY using the provided context.
+- Be clear, concise, and structured.
+- Do NOT include the word "context" in your answer.
+- Do NOT repeat the question.
+- If answer is not found, say: "I don't know".
+- Mention sources naturally like (Page 3) or (YouTube).
 
-Conversation History:
-{history}
+
 
 Context:
 {context}
@@ -288,21 +336,56 @@ Context:
 Question:
 {query}
 
-Answer (with sources):
+Final Answer:
 """
 )
 
 # step 8 generation of answers
 def generate_answer(query, context, history):
-    chain = answer_prompt | model
 
-    response = chain.invoke({
-        "context": context,
-        "query": query,
-        "history": history
-    })
+    prompt = f"""
+You are a helpful AI assistant.
 
-    return response.content if hasattr(response, "content") else response
+Answer ONLY using the context below.
+
+Context:
+{context[:2000]}
+
+Question:
+{query}
+
+Answer:
+"""
+
+    response = model.invoke(prompt)
+
+    answer = response.content if hasattr(response, "content") else response
+
+    return answer.strip()
+# def generate_answer(query, context, history):
+
+#     response = client.chat.completions.create(
+#         model="llama3-8b-8192",   # 🔥 FREE + FAST
+#         messages=[
+#             {
+#                 "role": "system",
+#                 "content": "Answer only from the provided context."
+#             },
+#             {
+#                 "role": "user",
+#                 "content": f"""
+# Context:
+# {context[:2000]}
+
+# Question:
+# {query}
+# """
+#             }
+#         ],
+#         temperature=0.3
+#     )
+
+#     return response.choices[0].message.content.strip()
 # step 9: creating conversational memory
 chat_history = []
 def update_memory(query, answer):
@@ -317,6 +400,7 @@ def add_system_message():
 def get_history(limit=10):
     return chat_history[-limit:]
 # rag pipeline
+print(chat_history)
 def rag_pipeline(query, vector_store, documents):
     """
     End-to-end RAG pipeline:
@@ -341,18 +425,20 @@ def rag_pipeline(query, vector_store, documents):
     history_messages = get_history()
 
     # 🔹 Prepare messages for LLM
-    messages = history_messages.copy()
+    # messages = history_messages.copy()
 
-    # Add context as system message
-    messages.append(SystemMessage(content=f"Context:\n{context}"))
+    # # Add context as system message
+    # messages.append(SystemMessage(content=f"Context:\n{context}"))
 
-    # Add current user query
-    messages.append(HumanMessage(content=query))
+    # # Add current user query
+    # messages.append(HumanMessage(content=query))
 
-    # 🔹 Step 8: Generate answer (chat-based)
-    response = model.invoke(messages)
+    # # 🔹 Step 8: Generate answer (chat-based)
+    # response = model.invoke(messages)
 
-    answer = response.content if hasattr(response, "content") else response
+    # answer = response.content if hasattr(response, "content") else response
+    # 🔥 USE CLEAN FUNCTION
+    answer = generate_answer(query, context, history_messages)
 
     # 🔹 Step 9: Update memory
     update_memory(query, answer)
@@ -363,31 +449,31 @@ def rag_pipeline(query, vector_store, documents):
         "context": context  # optional (for debugging)
     }
 # testing
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    # 🔹 Step 1–4: Setup (run once)
-    print("Loading data...")
+#     # 🔹 Step 1–4: Setup (run once)
+#     print("Loading data...")
 
-    docs = load_data("pdf", "dl-curriculum.pdf")   # 👈 give your PDF path
-    processed_docs = preprocess_documents(docs)
-    chunks = split_documents(processed_docs)
+#     docs = load_data("pdf", "dl-curriculum.pdf")   # 👈 give your PDF path
+#     processed_docs = preprocess_documents(docs)
+#     chunks = split_documents(processed_docs)
 
-    vector_store = vectorize_documents(chunks)
+#     vector_store = vectorize_documents(chunks)
 
-    print("Setup complete ✅")
+#     print("Setup complete ✅")
 
-    # 🔹 Step 5–9: Test query
-    while True:
-        query = input("\nAsk a question (or type 'exit'): ")
+#     # 🔹 Step 5–9: Test query
+#     while True:
+#         query = input("\nAsk a question (or type 'exit'): ")
 
-        if query.lower() == "exit":
-            break
+#         if query.lower() == "exit":
+#             break
 
-        result = rag_pipeline(query, vector_store, chunks)
+#         result = rag_pipeline(query, vector_store, chunks)
 
-        print("\n💡 Answer:")
-        print(result["answer"])
+#         print("\n💡 Answer:")
+#         print(result["answer"])
 
-        print("\n📄 Sources:")
-        for doc in result["sources"]:
-            print(doc.metadata)
+#         print("\n📄 Sources:")
+#         for doc in result["sources"]:
+#             print(doc.metadata)
